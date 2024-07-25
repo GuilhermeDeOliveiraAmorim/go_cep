@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,42 +19,58 @@ func createHTTPClient() *http.Client {
 	return &http.Client{Transport: tr, Timeout: 10 * time.Second}
 }
 
-func getLocationByCEP(cep string) (string, error) {
+func isValidCEP(cep string) bool {
+	cepPattern := `^\d{5}-\d{3}$|^\d{8}$`
+	re := regexp.MustCompile(cepPattern)
+	return re.MatchString(cep)
+}
+
+func getLocationByCEP(cep string) (string, int, error) {
+	if !isValidCEP(cep) {
+		return "", http.StatusUnprocessableEntity, fmt.Errorf("invalid zipcode")
+	}
+
 	client := createHTTPClient()
 	resp, err := client.Get("https://viacep.com.br/ws/" + cep + "/json/")
 	if err != nil {
-		return "", err
+		return "", resp.StatusCode, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("CEP não encontrado")
+		return "", resp.StatusCode, fmt.Errorf("can not find zipcode")
 	}
 
 	var data map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", err
+		return "", http.StatusUnprocessableEntity, err
+	}
+
+	if data["erro"] == "true" {
+		return "", http.StatusNotFound, fmt.Errorf("can not find zipcode")
 	}
 
 	city, ok := data["localidade"]
 	if !ok {
-		return "", fmt.Errorf("CEP não encontrado")
+		return "", http.StatusNotFound, fmt.Errorf("can not find zipcode")
 	}
 
-	return city, nil
+	return city, 0, nil
 }
 
 func getWeatherByCity(city string) (float64, error) {
 	client := createHTTPClient()
 	apiKey := "87022f0c0e0d4335a1d182957242207"
-	resp, err := client.Get(fmt.Sprintf("https://api.weatherapi.com/v1/current.json?key=%s&q=%s", apiKey, city))
+	encodedCity := url.QueryEscape(city)
+	url := "https://api.weatherapi.com/v1/current.json?key=" + apiKey + "&q=" + encodedCity
+	resp, err := client.Get(url)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("cidade não encontrada")
+		return 0, fmt.Errorf("can not find zipcode")
 	}
 
 	var data map[string]interface{}
@@ -62,12 +80,12 @@ func getWeatherByCity(city string) (float64, error) {
 
 	current, ok := data["current"].(map[string]interface{})
 	if !ok {
-		return 0, fmt.Errorf("dados do clima não encontrados")
+		return 0, fmt.Errorf("temperature data not found")
 	}
 
 	tempC, ok := current["temp_c"].(float64)
 	if !ok {
-		return 0, fmt.Errorf("temperatura não encontrada")
+		return 0, fmt.Errorf("temperature data not found")
 	}
 
 	return tempC, nil
@@ -80,7 +98,7 @@ func convertTemperature(tempC float64) (float64, float64) {
 	tempKStr := fmt.Sprintf("%.2f", tempK)
 	tempKFloat, err := strconv.ParseFloat(tempKStr, 64)
 	if err != nil {
-		fmt.Println("Erro ao converter temperatura para float64:", err)
+		fmt.Println("Error converting temperature to float64:", err)
 	}
 
 	return tempF, tempKFloat
@@ -89,15 +107,18 @@ func convertTemperature(tempC float64) (float64, float64) {
 func weatherHandler(w http.ResponseWriter, r *http.Request) {
 	cep := strings.TrimPrefix(r.URL.Path, "/weather/")
 
-	city, err := getLocationByCEP(cep)
-	if err != nil {
-		http.Error(w, "can not find zipcode (location) "+err.Error(), http.StatusNotFound)
+	city, statusCode, err := getLocationByCEP(cep)
+	if err != nil && statusCode == http.StatusUnprocessableEntity {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	} else if statusCode == http.StatusNotFound {
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
 	tempC, err := getWeatherByCity(city)
 	if err != nil {
-		http.Error(w, "can not find zipcode (weather) "+err.Error(), http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
