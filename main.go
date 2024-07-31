@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var baseURL = "https://viacep.com.br/ws/"
+
 func createHTTPClient() *http.Client {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -31,7 +33,7 @@ func getLocationByCEP(cep string) (string, int, error) {
 	}
 
 	client := createHTTPClient()
-	resp, err := client.Get("https://viacep.com.br/ws/" + cep + "/json/")
+	resp, err := client.Get(baseURL + cep + "/json/")
 	if err != nil {
 		return "", resp.StatusCode, err
 	}
@@ -55,7 +57,7 @@ func getLocationByCEP(cep string) (string, int, error) {
 		return "", http.StatusNotFound, fmt.Errorf("can not find zipcode")
 	}
 
-	return city, 0, nil
+	return city, 200, nil
 }
 
 func getWeatherByCity(city string) (float64, error) {
